@@ -2155,7 +2155,7 @@ func TestDifyAgent_ProcessStreamEvent_WithErrField(t *testing.T) {
 		// Create a stream event with the Err field set
 		streamEvent := dify.ChatMessageStreamChannelResponse{
 			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
-			Answer: "", // Error events typically have no Answer
+				Answer: "", // Error events typically have no Answer
 			},
 			Err: fmt.Errorf("token limit exceeded"),
 		}
