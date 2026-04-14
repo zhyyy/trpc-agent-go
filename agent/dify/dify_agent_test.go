@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"testing"
 
@@ -2025,8 +2026,8 @@ func TestDifyAgent_ChatflowStreaming_StreamEventErr(t *testing.T) {
 	defer mockServer.Close()
 
 	t.Run("stream event error stops processing and sends error event", func(t *testing.T) {
-		// 自定义 chatflow handler，返回带有错误的 SSE 事件
-		// 模拟 Dify SDK 在流式响应中返回错误（如 token 超限）
+		// Custom chatflow handler that returns SSE events with errors
+		// Simulates Dify SDK returning errors during streaming (e.g., token limit exceeded)
 		mockServer.ChatflowHandler = func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
@@ -2038,7 +2039,7 @@ func TestDifyAgent_ChatflowStreaming_StreamEventErr(t *testing.T) {
 				return
 			}
 
-			// 先发送一个正常的 chunk，然后发送一个错误事件
+			// Send a normal chunk first, then send an error event
 			events := []string{
 				`data: {"event": "message", "message_id": "msg-err-1", "conversation_id": "conv-err-1", "answer": "Partial "}`,
 				`data: {"event": "error", "message_id": "msg-err-1", "code": "token_limit_exceeded", "message": "Token limit exceeded", "status": 400}`,
@@ -2077,14 +2078,14 @@ func TestDifyAgent_ChatflowStreaming_StreamEventErr(t *testing.T) {
 			events = append(events, evt)
 		}
 
-		// 应该至少收到一个事件
+		// Should receive at least one event
 		if len(events) == 0 {
 			t.Fatal("Expected at least one event")
 		}
 
-		// 验证最后一个事件包含错误信息或者有正常的流式事件
-		// 注意：具体行为取决于 Dify SDK 如何解析 error 事件
-		// 如果 SDK 将 error 事件转为 Err 字段，则应该收到错误事件
+		// Verify the last event contains error info or has normal streaming events
+		// Note: exact behavior depends on how Dify SDK parses error events
+		// If SDK converts error events to the Err field, we should receive an error event
 		var hasResponse bool
 		for _, evt := range events {
 			if evt.Response != nil {
@@ -2097,7 +2098,7 @@ func TestDifyAgent_ChatflowStreaming_StreamEventErr(t *testing.T) {
 	})
 
 	t.Run("chatflow streaming with context cancelled during stream", func(t *testing.T) {
-		// 恢复默认 handler
+		// Restore default handler
 		mockServer.ChatflowHandler = defaultChatflowHandler
 
 		streaming := true
@@ -2124,22 +2125,22 @@ func TestDifyAgent_ChatflowStreaming_StreamEventErr(t *testing.T) {
 			t.Fatalf("Run failed: %v", err)
 		}
 
-		// 立即取消上下文
+		// Cancel context immediately
 		cancel()
 
-		// 消费所有事件，确保 goroutine 正常退出
+		// Consume all events to ensure goroutine exits normally
 		for range eventChan {
-			// 消费事件
+			// Consume events
 		}
-		// 测试通过：goroutine 正常退出，channel 正常关闭
+		// Test passed: goroutine exited normally, channel closed properly
 	})
 
-	// 恢复默认 handler
+	// Restore default handler
 	mockServer.ResetHandlers()
 }
 
-// TestDifyAgent_ProcessStreamEvent_WithErrField 直接测试 processStreamEvent 不处理 Err 字段
-// （Err 字段的检查在 runStreaming 的循环中，processStreamEvent 只处理正常事件）
+// TestDifyAgent_ProcessStreamEvent_WithErrField directly tests that processStreamEvent does not handle the Err field
+// (Err field checking is done in the runStreaming loop; processStreamEvent only handles normal events)
 func TestDifyAgent_ProcessStreamEvent_WithErrField(t *testing.T) {
 	difyAgent := &DifyAgent{
 		name:           "test-agent",
@@ -2151,16 +2152,16 @@ func TestDifyAgent_ProcessStreamEvent_WithErrField(t *testing.T) {
 	}
 
 	t.Run("stream event with Err field set", func(t *testing.T) {
-		// 创建一个带有 Err 字段的 stream event
+		// Create a stream event with the Err field set
 		streamEvent := dify.ChatMessageStreamChannelResponse{
 			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
-				Answer: "", // 错误事件通常没有 Answer
+			Answer: "", // Error events typically have no Answer
 			},
 			Err: fmt.Errorf("token limit exceeded"),
 		}
 
-		// processStreamEvent 不检查 Err 字段，Err 检查在 runStreaming 循环中
-		// 当 Answer 为空时，ConvertStreamingToEvent 返回 nil
+		// processStreamEvent does not check the Err field; Err checking is in the runStreaming loop
+		// When Answer is empty, ConvertStreamingToEvent returns nil
 		evt, content, err := difyAgent.processStreamEvent(context.Background(), streamEvent, invocation)
 		if err != nil {
 			t.Errorf("processStreamEvent should not return error for Err field, got: %v", err)
@@ -2174,7 +2175,7 @@ func TestDifyAgent_ProcessStreamEvent_WithErrField(t *testing.T) {
 	})
 
 	t.Run("stream event with both Err and Answer", func(t *testing.T) {
-		// 极端情况：同时有 Err 和 Answer
+		// Edge case: both Err and Answer are present
 		streamEvent := dify.ChatMessageStreamChannelResponse{
 			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
 				Answer:    "partial content",
@@ -2183,8 +2184,8 @@ func TestDifyAgent_ProcessStreamEvent_WithErrField(t *testing.T) {
 			Err: fmt.Errorf("some error"),
 		}
 
-		// processStreamEvent 只处理 Answer，不检查 Err
-		// 在 runStreaming 中，Err 检查在 processStreamEvent 之前
+		// processStreamEvent only handles Answer, does not check Err
+		// In runStreaming, Err checking happens before processStreamEvent
 		evt, content, err := difyAgent.processStreamEvent(context.Background(), streamEvent, invocation)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
@@ -2195,6 +2196,163 @@ func TestDifyAgent_ProcessStreamEvent_WithErrField(t *testing.T) {
 		if content != "partial content" {
 			t.Errorf("expected content 'partial content', got: %s", content)
 		}
+	})
+}
+
+// TestDifyAgent_ChatflowStreaming_EOFIsNotError verifies that io.EOF from the Dify SDK
+// (emitted on normal stream close) is treated as a graceful shutdown, not an error.
+// The agent should still emit the final aggregated event.
+func TestDifyAgent_ChatflowStreaming_EOFIsNotError(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name:             "test-agent",
+		eventConverter:   &defaultDifyEventConverter{},
+		streamingBufSize: defaultStreamingChannelSize,
+		mode:             ModeChatflow,
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "eof-test",
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "hello",
+		},
+		RunOptions: agent.RunOptions{
+			RuntimeState: make(map[string]any),
+		},
+	}
+
+	t.Run("EOF on stream close is not treated as error", func(t *testing.T) {
+		eventChan := make(chan *event.Event, defaultStreamingChannelSize)
+
+		// Simulate a stream channel that sends a normal chunk then EOF
+		streamChan := make(chan dify.ChatMessageStreamChannelResponse, 3)
+		streamChan <- dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:    "Hello world",
+				MessageID: "msg-eof-1",
+			},
+		}
+		// Dify SDK emits EOF on normal stream close
+		streamChan <- dify.ChatMessageStreamChannelResponse{
+			Err: io.EOF,
+		}
+		close(streamChan)
+
+		// Run the streaming loop inline (simulating runStreaming's inner logic)
+		var aggregatedContent string
+		var lastMessageID string
+		var hasError bool
+		ctx := context.Background()
+
+		for streamEvent := range streamChan {
+			if streamEvent.Err != nil {
+				if streamEvent.Err == io.EOF {
+					break
+				}
+				hasError = true
+				break
+			}
+
+			evt, content, err := difyAgent.processStreamEvent(ctx, streamEvent, invocation)
+			if err != nil {
+				t.Fatalf("processStreamEvent failed: %v", err)
+			}
+			if evt != nil && evt.Response != nil && evt.Response.ID != "" {
+				lastMessageID = evt.Response.ID
+			}
+			if content != "" {
+				aggregatedContent += content
+			}
+			if evt != nil {
+				agent.EmitEvent(ctx, invocation, eventChan, evt)
+			}
+		}
+
+		if hasError {
+			t.Fatal("EOF should not be treated as an error")
+		}
+
+		// Final event should still be sent
+		difyAgent.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContent, lastMessageID)
+		close(eventChan)
+
+		var events []*event.Event
+		for evt := range eventChan {
+			events = append(events, evt)
+		}
+
+		// Should have the streaming chunk + final event
+		if len(events) < 2 {
+			t.Fatalf("expected at least 2 events (chunk + final), got %d", len(events))
+		}
+
+		// Verify no error events
+		for _, evt := range events {
+			if evt.Response != nil && evt.Response.Error != nil {
+				t.Errorf("unexpected error event: %s", evt.Response.Error.Message)
+			}
+		}
+
+		// Verify the final event has Done=true and aggregated content
+		lastEvt := events[len(events)-1]
+		if lastEvt.Response == nil || !lastEvt.Response.Done {
+			t.Error("expected final event with Done=true")
+		}
+		if lastEvt.Response != nil && len(lastEvt.Response.Choices) > 0 {
+			if lastEvt.Response.Choices[0].Message.Content != "Hello world" {
+				t.Errorf("expected aggregated content 'Hello world', got: %s",
+					lastEvt.Response.Choices[0].Message.Content)
+			}
+		}
+	})
+
+	t.Run("real error is still surfaced", func(t *testing.T) {
+		eventChan := make(chan *event.Event, defaultStreamingChannelSize)
+
+		// Simulate a stream channel that sends a real error (not EOF)
+		streamChan := make(chan dify.ChatMessageStreamChannelResponse, 3)
+		streamChan <- dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:    "Partial ",
+				MessageID: "msg-real-err",
+			},
+		}
+		streamChan <- dify.ChatMessageStreamChannelResponse{
+			Err: fmt.Errorf("token limit exceeded"),
+		}
+		close(streamChan)
+
+		ctx := context.Background()
+		var gotError bool
+		var errorMsg string
+
+		for streamEvent := range streamChan {
+			if streamEvent.Err != nil {
+				if streamEvent.Err == io.EOF {
+					break
+				}
+				gotError = true
+				errorMsg = streamEvent.Err.Error()
+				break
+			}
+
+			evt, _, err := difyAgent.processStreamEvent(ctx, streamEvent, invocation)
+			if err != nil {
+				t.Fatalf("processStreamEvent failed: %v", err)
+			}
+			if evt != nil {
+				agent.EmitEvent(ctx, invocation, eventChan, evt)
+			}
+		}
+
+		if !gotError {
+			t.Fatal("expected a real error to be detected")
+		}
+		if errorMsg != "token limit exceeded" {
+			t.Errorf("expected error message 'token limit exceeded', got: %s", errorMsg)
+		}
+
+		close(eventChan)
 	})
 }
 
