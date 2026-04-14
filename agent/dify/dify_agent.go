@@ -365,6 +365,13 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return
 			}
+			
+			// Check for streaming errors returned by Dify SDK (e.g., token limit exceeded, server errors)
+			if streamEvent.Err != nil {
+				r.sendErrorEvent(ctx, eventChan, invocation, streamEvent.Err.Error())
+				return
+			}
+
 			evt, content, err := r.processStreamEvent(ctx, streamEvent, invocation)
 			if err != nil {
 				r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
