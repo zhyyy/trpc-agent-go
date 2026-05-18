@@ -103,9 +103,16 @@ func New(opts ...Option) (*VectorStore, error) {
 
 	var sparseEncoder encoder.SparseEncoder
 	if option.enableTSVector {
-		sparseEncoder, err = encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: option.language})
-		if err != nil {
-			return nil, fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
+		// Prefer caller-injected encoder to avoid repeatedly loading the Jieba
+		// dictionary and BM25 token-frequency JSON across VectorStore instances.
+		// See WithSparseEncoder for details.
+		if option.sparseEncoder != nil {
+			sparseEncoder = option.sparseEncoder
+		} else {
+			sparseEncoder, err = encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: option.language})
+			if err != nil {
+				return nil, fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
+			}
 		}
 	}
 
