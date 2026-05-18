@@ -10,6 +10,7 @@
 package tcvector
 
 import (
+	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -73,6 +74,14 @@ type options struct {
 
 	// maxResults is the maximum number of search results.
 	maxResults int
+
+	// sparseEncoder allows callers to inject a pre-built sparse encoder
+	// (typically BM25) so that expensive initialization (e.g. loading Jieba
+	// dictionary and BM25 token-frequency JSON) can be done once and shared
+	// across multiple VectorStore instances in the same process.
+	// When nil and enableTSVector is true, a new BM25 encoder will be built
+	// from language in the standard way (backward compatible).
+	sparseEncoder encoder.SparseEncoder
 }
 
 var defaultOptions = options{
@@ -331,5 +340,38 @@ func WithRemoteEmbeddingModel(model string) Option {
 func WithFilterAll(enable bool) Option {
 	return func(o *options) {
 		o.filterAll = enable
+	}
+}
+
+// WithSparseEncoder injects a pre-built sparse encoder (typically a BM25 encoder)
+// to be reused across VectorStore instances.
+//
+// Motivation:
+//   - encoder.NewBM25Encoder loads the Jieba dictionary and downloads/parses the
+//     BM25 token-frequency JSON, which can take hundreds of milliseconds to seconds.
+//   - In production where many VectorStores (one per collection) are created
+//     repeatedly (e.g. per-runner construction), repeating this work is wasteful.
+//   - BM25Encoder state is read-only after initialization, so a single instance
+//     is safe to share across goroutines and VectorStores using the same language.
+//
+// Semantics:
+//   - When enableTSVector is false, the injected encoder is ignored.
+//   - When enableTSVector is true and a non-nil encoder is injected, it is used
+//     as-is and the built-in BM25Encoder construction is skipped.
+//   - When enableTSVector is true and no encoder is injected, the existing
+//     behavior is preserved: a fresh BM25Encoder is created from the language
+//     configured via WithLanguage.
+//
+// Typical usage (process-wide cache, built once per language at startup):
+//
+//	enc, _ := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: "zh"})
+//	store, _ := tcvector.New(
+//	    tcvector.WithURL(url), ...,
+//	    tcvector.WithEnableTSVector(true),
+//	    tcvector.WithSparseEncoder(enc),
+//	)
+func WithSparseEncoder(enc encoder.SparseEncoder) Option {
+	return func(o *options) {
+		o.sparseEncoder = enc
 	}
 }
